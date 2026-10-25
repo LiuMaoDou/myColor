@@ -1,0 +1,39 @@
+name: verify
+on: [push, pull_request]
+jobs:
+  app:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: atlas
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: color_atlas
+        ports: ['54339:5432']
+        options: >-
+          --health-cmd "pg_isready -U atlas -d color_atlas"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://atlas:ci-only-password@127.0.0.1:54339/color_atlas
+      APP_ORIGIN: http://localhost:3017
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run db:setup
+      - run: npm run format:check
+      - run: npm run check
+      - run: npx playwright install --with-deps chromium
+      - run: |
+          npm run start > /tmp/color-atlas-server.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3017/api/health; then break; fi
+            sleep 1
+          done
+          mkdir -p /tmp/color-atlas-qa
+          npm run test:e2e
