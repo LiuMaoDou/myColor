@@ -1,6 +1,6 @@
 # 色集 · Color Atlas
 
-A personal color workspace built from [the supplied development plan](docs/development-plan.md). It collects individual colors, ordered palettes and website bookmarks with a shared search, organization, publishing and backup workflow.
+A personal color workspace built from [the supplied development plan](docs/development-plan.md). It collects individual colors, ordered palettes and website bookmarks with inline adding, search and editing.
 
 **Local app:** [http://localhost:3017](http://localhost:3017)  
 **Open directly:** no username, password or login is required. Existing resources stay in the same single-user workspace.
@@ -30,20 +30,19 @@ The app listens on loopback port **3017**. PostgreSQL listens on loopback port *
 
 - Live parsing of HEX/HEX8, RGB/RGBA, HSL/HSLA, HSV/HSB, CSS names and explicit RGB triples; original input, source coordinates and alpha preserved.
 - Current-format swatch copying, keyboard access and a manual-copy dialog when permission is denied.
-- Persistent color / palette / website create and edit flows, roles, drag and keyboard ordering, single-color snapshots, duplicate warnings and palette copies.
-- Categories with a three-level tree, tag merging, ordered mixed-resource collections, favorites, batch organization, archive, recycle and restore.
-- Chinese / English / color search, combinable URL filters and 48-resource pagination.
-- Explicit public preview / publish / revoke, separate private notes and ratings, PostgreSQL RLS and version-conflict detection.
-- JSON / CSV import preview with selected valid rows and idempotency; JSON / CSV / CSS / text export. JSON restoration preserves source colors and relationships; imported publication state is intentionally reset to private.
-- Color conversion and alpha-aware WCAG contrast tools; light / dark shell and compact / comfortable density.
+- Simple color / palette creation and editing with an optional name, a one-line color input and a pure color preview on its right. Save directly; multiple colors become a palette. Website bookmarks are added from the Websites library. Existing metadata is preserved on edit.
+- Add colors directly from the library: click Add or press Enter to save without opening a dialog or editor. An optional name field follows the color input; a blank name defaults to the entered color data. The library refreshes immediately and keeps search, sorting and batch deletion.
+- Chinese / English / color search, resource-type filters and 48-resource pagination.
+- PostgreSQL RLS and version-conflict detection. The sidebar contains only the library, colors, palettes and websites. Tools, import/export pages, settings, favorites, public sharing, collections, categories, tags, archive and recycle-bin interfaces are retired; old feature URLs return to the library. Public and favorite actions are disabled.
+- Existing local display preferences are honored; copy format remains available in the toolbar.
 
 ## Stack and architecture
 
 [Next.js](https://nextjs.org/docs), React, strict TypeScript, Tailwind, [shadcn/ui](https://ui.shadcn.com/docs) components, [Culori](https://culorijs.org/api/), Zod, PostgreSQL, Vitest and Playwright. See [decisions](docs/decisions.md).
 
-`lib/color-core` is shared by client and server. All writes pass through same-origin APIs into transactional services. Every resource request uses a restricted database role with a transaction-local owner identity. Public responses use an explicit whitelist. The server resolves the existing workspace owner internally; there are no accounts to sign into, session cookies or stored application passwords.
+`lib/color-core` is shared by client and server. All writes pass through same-origin APIs into transactional services. Every resource request uses a restricted database role with a transaction-local owner identity. The server resolves the existing workspace owner internally; there are no accounts to sign into, session cookies or stored application passwords.
 
-This implementation uses the plan's self-hosted option: local PostgreSQL and a passwordless single-user workspace, per the user's updated requirement. The server binds to loopback by default. Anyone who can reach the server can use its workspace; the public view remains a separate, filtered presentation of published resources.
+This implementation uses the plan's self-hosted option: local PostgreSQL and a passwordless single-user workspace, per the user's updated requirement. The server binds to loopback by default. Anyone who can reach the server can use its workspace; public sharing endpoints are disabled.
 
 ## Verification
 

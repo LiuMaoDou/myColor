@@ -1,71 +1,54 @@
 "use client";
-import { useState, useEffect } from "react";
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useState, useEffect, useRef } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Plus,
-  SlidersHorizontal,
   LayoutGrid,
   CheckSquare,
-  X,
   ChevronLeft,
   ChevronRight,
   Search,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, type Preferences } from "@/lib/client";
-import type { Resource, Organization } from "@/lib/types";
-import { parseColorInput } from "@/lib/color-core";
+import type { Resource } from "@/lib/types";
+import { parseColorBatch, MAX_COLORS } from "@/lib/color-core";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Skeleton } from "./ui/skeleton";
 import { ResourceCard } from "./resource-card";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "./ui/dialog";
+import { libraryQuery } from "@/lib/library-query";
 export function Library({
-  org,
   preferences,
-  publicOnly,
   refresh,
   onRefresh,
 }: {
-  org: Organization;
   preferences: Preferences;
-  publicOnly: boolean;
   refresh: number;
   onRefresh: () => void;
 }) {
   const router = useRouter(),
-    pathname = usePathname(),
     params = useSearchParams();
   const [resources, setResources] = useState<Resource[]>([]),
     [total, setTotal] = useState(0),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
     [quick, setQuick] = useState(""),
-    [filters, setFilters] = useState(false),
+    [quickName, setQuickName] = useState(""),
+    [quickError, setQuickError] = useState(""),
+    [adding, setAdding] = useState(false),
+    [ready, setReady] = useState(false),
     [selecting, setSelecting] = useState(false),
     [selected, setSelected] = useState<string[]>([]),
-    [batch, setBatch] = useState(""),
-    [batchValue, setBatchValue] = useState(""),
     [batchBusy, setBatchBusy] = useState(false);
-  const query = params.toString(),
-    collectionId = pathname.startsWith("/collections/")
-      ? pathname.split("/")[2]
-      : params.get("collection"),
-    collection = org.collections.find((c) => c.id === collectionId),
-    categorySlug = pathname.startsWith("/explore/categories/")
-      ? pathname.split("/")[3]
-      : null;
-  const parsed = parseColorInput(quick);
+  const query = libraryQuery(params).toString(),
+    pathname = "/library";
+  const quickInput = useRef<HTMLInputElement>(null);
+  const addingRef = useRef(false);
+  const parsed = quick.trim() ? parseColorBatch(quick.trim()) : [];
+  useEffect(() => setReady(true), []);
   const currentType = params.get("type") || "";
   const page = Number(params.get("page")) || 1;
-  const trash = params.get("trash") === "true";
-  const archive = params.get("status") === "archived";
   function filter(key: string, value: string) {
     const p = new URLSearchParams(query);
     if (value) p.set(key, value);
@@ -73,19 +56,69 @@ export function Library({
     p.delete("page");
     router.push(`${pathname}?${p}`);
   }
+  async function addColor() {
+    if (!ready || addingRef.current) return;
+    const input = quick.trim();
+    const name = quickName.trim() || input;
+    if (!input) {
+      setQuickError("请输入颜色数据");
+      quickInput.current?.focus();
+      return;
+    }
+    const invalid = parsed.find((c) => c.result.state !== "valid");
+    if (invalid && invalid.result.state !== "valid") {
+      setQuickError(
+        invalid.result.state === "ambiguous"
+          ? "请使用 rgb(...) 明确 RGB 数值，例如 rgb(40, 127, 131)"
+          : invalid.result.issues[0],
+      );
+      return;
+    }
+    if (parsed.length > MAX_COLORS) {
+      setQuickError(`每个色板最多 ${MAX_COLORS} 个颜色`);
+      return;
+    }
+    if (name.length > 200) {
+      setQuickError("名字最多 200 个字符；颜色数据较长时，请填写一个简短名字");
+      return;
+    }
+    addingRef.current = true;
+    setAdding(true);
+    setQuickError("");
+    try {
+      const resource = await api<Resource>("/resources", {
+        method: "POST",
+        body: {
+          type: parsed.length > 1 ? "palette" : "color",
+          title: name,
+          colors: parsed.map((c) => ({ input: c.input.trim() })),
+        },
+      });
+      setQuick("");
+      setQuickName("");
+      // Keep the new card visible when adding from a searched or filtered list.
+      const p = libraryQuery(params);
+      for (const key of ["q", "favorite", "page"]) p.delete(key);
+      if (p.has("sort")) p.set("sort", "recent");
+      if (currentType && currentType !== resource.type)
+        p.set("type", resource.type);
+      if (p.toString() !== query)
+        router.replace(`/library${p.size ? "?" + p : ""}`);
+      onRefresh();
+      toast.success("已添加颜色");
+    } catch (e) {
+      setQuickError((e as Error).message);
+    } finally {
+      addingRef.current = false;
+      setAdding(false);
+    }
+  }
   useEffect(() => {
     let active = true;
     setLoading(true);
     setError("");
     const p = new URLSearchParams(query);
-    if (collectionId) {
-      p.set("collection", collectionId);
-      if (!p.has("sort")) p.set("sort", "manual");
-    }
-    if (categorySlug) p.set("category", categorySlug);
-    api<{ resources: Resource[]; total: number }>(
-      `${publicOnly ? "/public" : ""}/resources?${p}`,
-    )
+    api<{ resources: Resource[]; total: number }>(`/resources?${p}`)
       .then((d) => {
         if (active) {
           setResources(d.resources);
@@ -97,29 +130,11 @@ export function Library({
     return () => {
       active = false;
     };
-  }, [query, publicOnly, refresh, collectionId, categorySlug]);
-  async function favorite(r: Resource) {
-    try {
-      await api(`/resources/${r.id}/favorite`, {
-        method: "POST",
-        body: { favorite: !r.favorite },
-      });
-      setResources(
-        resources.map((x) =>
-          x.id === r.id ? { ...x, favorite: !r.favorite } : x,
-        ),
-      );
-      if (params.get("favorite")) onRefresh();
-    } catch (e) {
-      toast.error((e as Error).message);
-    }
-  }
+  }, [query, refresh]);
   async function runBatch(action: string) {
     if (
-      ["delete", "archive"].includes(action) &&
-      !window.confirm(
-        `确定${action === "delete" ? "移入回收站" : "归档"}所选 ${selected.length} 项？`,
-      )
+      action === "delete" &&
+      !window.confirm(`确定删除所选 ${selected.length} 项资源？`)
     )
       return;
     setBatchBusy(true);
@@ -129,25 +144,10 @@ export function Library({
         body: {
           ids: selected,
           action,
-          categoryIds:
-            action === "categorize"
-              ? batchValue
-                ? [batchValue]
-                : []
-              : undefined,
-          tags:
-            action === "tag"
-              ? batchValue
-                  .split(/[,，]/)
-                  .map((t) => t.trim())
-                  .filter(Boolean)
-              : undefined,
-          collectionId: action === "collect" ? batchValue : undefined,
         },
       });
       toast.success(`已更新 ${selected.length} 项资源`);
       setSelected([]);
-      setBatch("");
       onRefresh();
     } catch (e) {
       toast.error((e as Error).message);
@@ -155,90 +155,91 @@ export function Library({
       setBatchBusy(false);
     }
   }
-  async function reorder(r: Resource, delta: number) {
-    if (!collection) return;
-    const ids = [...collection.resourceIds],
-      i = ids.indexOf(r.id),
-      j = i + delta;
-    if (i < 0 || j < 0 || j >= ids.length) return;
-    [ids[i], ids[j]] = [ids[j], ids[i]];
-    try {
-      await api(`/collections/${collection.id}`, {
-        method: "PATCH",
-        body: { resourceIds: ids },
-      });
-      onRefresh();
-    } catch (e) {
-      toast.error((e as Error).message);
-    }
-  }
   const title =
-    collection?.name ||
-    (trash
-      ? "回收站"
-      : archive
-        ? "已归档"
-        : publicOnly
-          ? "发现好颜色"
-          : params.get("favorite")
-            ? "我的收藏"
-            : currentType === "color"
-              ? "单色收藏"
-              : currentType === "palette"
-                ? "色板收藏"
-                : currentType === "website"
-                  ? "网站收藏"
-                  : "我的资源库");
+    currentType === "color"
+      ? "单色收藏"
+      : currentType === "palette"
+        ? "色板收藏"
+        : currentType === "website"
+          ? "网站收藏"
+          : "我的资源库";
   return (
     <>
       <div className="section-heading">
         <div>
           <h1>{title}</h1>
-          <p>
-            {trash
-              ? "删除的资源保留在这里，可随时恢复。暂不自动清理。"
-              : collection
-                ? collection.description || "把服务于同一个项目的灵感放在一起。"
-                : publicOnly
-                  ? "探索主动公开的颜色与灵感，点击色块即可复制。"
-                  : "收藏每一次灵感，让好颜色随手可用。"}
-          </p>
+          <p>收藏每一次灵感，让好颜色随手可用。</p>
         </div>
-        {!publicOnly ? (
-          <Button size="lg" onClick={() => router.push("/new")}>
+        {currentType === "website" ? (
+          <Button size="lg" onClick={() => router.push("/new?type=website")}>
             <Plus />
-            新增资源
+            添加网站
           </Button>
         ) : null}
       </div>
-      {!publicOnly && !trash && !archive ? (
+      {currentType !== "website" ? (
         <form
           className="quick-entry"
           onSubmit={(e) => {
             e.preventDefault();
-            router.push("/new?input=" + encodeURIComponent(quick));
+            void addColor();
           }}
         >
-          <span className="quick-preview checker">
-            <span
-              style={{
-                backgroundColor:
-                  parsed.state === "valid"
-                    ? parsed.value.preview.css
-                    : "#287F83",
-              }}
-            />
+          <span className="quick-preview checker" aria-hidden="true">
+            {parsed.some((c) => c.result.state === "valid") ? (
+              parsed.map((c, i) =>
+                c.result.state === "valid" ? (
+                  <span
+                    key={i}
+                    style={{
+                      backgroundColor: c.result.value.preview.css,
+                    }}
+                  />
+                ) : null,
+              )
+            ) : (
+              <span />
+            )}
           </span>
           <Input
+            ref={quickInput}
+            className="quick-color-input"
             aria-label="快速输入颜色"
+            aria-invalid={!!quickError}
+            aria-describedby={quickError ? "quick-color-error" : undefined}
+            disabled={!ready || adding}
             placeholder="输入颜色，如 #287F83 或 rgb(40,127,131)"
             value={quick}
-            onChange={(e) => setQuick(e.target.value)}
+            onChange={(e) => {
+              setQuick(e.target.value);
+              setQuickError("");
+            }}
           />
-          <Button type="submit" variant="secondary">
-            添加
+          <Input
+            className="quick-name-input"
+            aria-label="名字（可选）"
+            placeholder="名字（可选）"
+            maxLength={200}
+            disabled={!ready || adding}
+            value={quickName}
+            onChange={(e) => {
+              setQuickName(e.target.value);
+              setQuickError("");
+            }}
+          />
+          <Button type="submit" variant="secondary" disabled={!ready || adding}>
+            {adding ? "添加中…" : "添加"}
           </Button>
         </form>
+      ) : null}
+      {quickError && currentType !== "website" ? (
+        <p
+          id="quick-color-error"
+          role="alert"
+          className="error-text mb-5 -mt-4"
+        >
+          {quickError}
+        </p>
       ) : null}
       <div className="library-toolbar">
         <div className="filter-tabs" aria-label="资源类型">
@@ -260,81 +261,28 @@ export function Library({
         </div>
         <div className="toolbar-actions">
           <select
-            aria-label="筛选分类"
-            value={params.get("category") || ""}
-            onChange={(e) => filter("category", e.target.value)}
-          >
-            <option value="">全部分类</option>
-            <option value="uncategorized">未分类</option>
-            {org.categories.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-          <select
             aria-label="排序"
-            value={params.get("sort") || (collection ? "manual" : "recent")}
+            value={params.get("sort") || "recent"}
             onChange={(e) => filter("sort", e.target.value)}
           >
-            {collection ? <option value="manual">合集顺序</option> : null}
             <option value="recent">最近更新</option>
             <option value="oldest">最早添加</option>
             <option value="name">名称排序</option>
           </select>
           <Button
-            variant="ghost"
+            variant={selecting ? "secondary" : "ghost"}
             size="icon"
-            aria-label="更多筛选"
-            aria-expanded={filters}
-            onClick={() => setFilters(!filters)}
+            aria-label="批量选择"
+            aria-pressed={selecting}
+            onClick={() => {
+              setSelecting(!selecting);
+              setSelected([]);
+            }}
           >
-            <SlidersHorizontal />
+            <CheckSquare />
           </Button>
-          {!publicOnly ? (
-            <Button
-              variant={selecting ? "secondary" : "ghost"}
-              size="icon"
-              aria-label="批量选择"
-              aria-pressed={selecting}
-              onClick={() => {
-                setSelecting(!selecting);
-                setSelected([]);
-              }}
-            >
-              <CheckSquare />
-            </Button>
-          ) : null}
         </div>
       </div>
-      {filters ? (
-        <div className="extra-filters">
-          <select
-            aria-label="筛选标签"
-            value={params.get("tag") || ""}
-            onChange={(e) => filter("tag", e.target.value)}
-          >
-            <option value="">全部标签</option>
-            {org.tags.map((t) => (
-              <option key={t.id}>{t.name}</option>
-            ))}
-          </select>
-          {!publicOnly ? (
-            <select
-              aria-label="可见性"
-              value={params.get("visibility") || ""}
-              onChange={(e) => filter("visibility", e.target.value)}
-            >
-              <option value="">全部可见性</option>
-              <option value="private">私有</option>
-              <option value="public">公开</option>
-            </select>
-          ) : null}
-          <Button variant="ghost" onClick={() => router.push(pathname)}>
-            清除筛选
-          </Button>
-        </div>
-      ) : null}
       {selecting ? (
         <div className="batch-toolbar">
           <label className="check-label">
@@ -353,63 +301,12 @@ export function Library({
           <span>已选 {selected.length} 项</span>
           <Button
             size="sm"
-            variant="outline"
+            variant="destructive"
             disabled={!selected.length || batchBusy}
-            onClick={() => runBatch("favorite")}
+            onClick={() => runBatch("delete")}
           >
-            收藏
+            删除
           </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!selected.length}
-            onClick={() => {
-              setBatch("categorize");
-              setBatchValue("");
-            }}
-          >
-            分类
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!selected.length}
-            onClick={() => {
-              setBatch("tag");
-              setBatchValue("");
-            }}
-          >
-            标签
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!selected.length}
-            onClick={() => {
-              setBatch("collect");
-              setBatchValue("");
-            }}
-          >
-            加入合集
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!selected.length || batchBusy}
-            onClick={() => runBatch(trash ? "restore" : "archive")}
-          >
-            {trash ? "恢复" : "归档"}
-          </Button>
-          {!trash ? (
-            <Button
-              size="sm"
-              variant="destructive"
-              disabled={!selected.length || batchBusy}
-              onClick={() => runBatch("delete")}
-            >
-              删除
-            </Button>
-          ) : null}
           <small>使用复选框选择；色块仍可复制</small>
         </div>
       ) : null}
@@ -428,17 +325,17 @@ export function Library({
       ) : !resources.length ? (
         <div className="empty-state">
           <Search size={32} />
-          <h2>{publicOnly ? "还没有公开的资源" : "这里还没有资源"}</h2>
-          <p>
-            {publicOnly
-              ? "只有站长主动发布的内容会出现在这里。"
-              : "试试其他筛选条件，或收藏你的第一个颜色。"}
-          </p>
-          {!publicOnly ? (
-            <Button onClick={() => router.push("/new?input=%23287F83")}>
-              从 #287F83 开始
-            </Button>
-          ) : null}
+          <h2>这里还没有资源</h2>
+          <p>试试其他筛选条件，或添加你的第一个颜色。</p>
+          <Button
+            onClick={() =>
+              currentType === "website"
+                ? router.push("/new?type=website")
+                : quickInput.current?.focus()
+            }
+          >
+            {currentType === "website" ? "添加网站" : "添加颜色"}
+          </Button>
         </div>
       ) : (
         <div className="resource-grid" data-density={preferences.density}>
@@ -447,8 +344,6 @@ export function Library({
               key={r.id}
               resource={r}
               preferences={preferences}
-              publicOnly={publicOnly}
-              onFavorite={() => favorite(r)}
               selecting={selecting}
               selected={selected.includes(r.id)}
               onSelect={() =>
@@ -458,19 +353,13 @@ export function Library({
                     : [...selected, r.id],
                 )
               }
-              onMove={
-                collection && !publicOnly
-                  ? (delta) => reorder(r, delta)
-                  : undefined
-              }
             />
           ))}
         </div>
       )}
       <div className="list-footer">
         <span>
-          <LayoutGrid size={14} /> {total} 项资源
-          {publicOnly ? " · 已公开" : " · 点击色块复制色值"}
+          <LayoutGrid size={14} /> {total} 项资源 · 点击色块复制色值
         </span>
         {total > 48 ? (
           <div className="pagination">
@@ -506,54 +395,6 @@ export function Library({
           </div>
         ) : null}
       </div>
-      <Dialog open={!!batch} onOpenChange={(o) => !o && setBatch("")}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              批量
-              {batch === "categorize"
-                ? "分类"
-                : batch === "tag"
-                  ? "添加标签"
-                  : "加入合集"}
-            </DialogTitle>
-            <DialogDescription>
-              应用于 {selected.length} 项已选资源。
-            </DialogDescription>
-          </DialogHeader>
-          {batch === "tag" ? (
-            <Input
-              aria-label="批量标签"
-              value={batchValue}
-              onChange={(e) => setBatchValue(e.target.value)}
-              placeholder="用逗号分隔标签"
-            />
-          ) : (
-            <select
-              aria-label="批量目标"
-              value={batchValue}
-              onChange={(e) => setBatchValue(e.target.value)}
-            >
-              <option value="">
-                {batch === "categorize" ? "移入未分类" : "选择合集"}
-              </option>
-              {(batch === "categorize" ? org.categories : org.collections).map(
-                (c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ),
-              )}
-            </select>
-          )}
-          <Button
-            disabled={batchBusy || (batch === "collect" && !batchValue)}
-            onClick={() => runBatch(batch)}
-          >
-            确认应用
-          </Button>
-        </DialogContent>
-      </Dialog>
     </>
   );
 }

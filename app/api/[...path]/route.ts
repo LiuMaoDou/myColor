@@ -7,10 +7,8 @@ import {
   saveResource,
   readResource,
   mutateResource,
-  organization,
-  toInput,
 } from "@/server/resources";
-import { changeOrganization } from "@/server/organization";
+import { libraryQuery } from "@/lib/library-query";
 import { exportData, importPreview, commitImport } from "@/server/imports";
 import { AppError, requireCondition } from "@/server/errors";
 import {
@@ -85,22 +83,13 @@ async function handler(
     }
     if (path[0] === "health") return respond({ ok: true });
     if (path[0] === "auth") throw new AppError("NOT_FOUND", "接口不存在", 404);
-    const publicOnly = path[0] === "public";
-    const p = publicOnly ? path.slice(1) : path;
-    if (publicOnly) {
-      requireCondition(method === "GET", "FORBIDDEN", "公开接口为只读", 403);
-      if (p[0] === "resources")
-        return respond(
-          p[1]
-            ? await asActor(null, (tx) =>
-                readResource(tx, z.uuid().parse(p[1]), true),
-              )
-            : await listResources(null, url.searchParams, true),
-        );
-      if (p[0] === "organization")
-        return respond(await asActor(null, (tx) => organization(tx, null)));
+    if (
+      ["public", "organization", "categories", "tags", "collections"].includes(
+        path[0],
+      )
+    )
       throw new AppError("NOT_FOUND", "接口不存在", 404);
-    }
+    const p = path;
     const actor = await workspaceOwner();
     if (p[0] === "duplicates" && method === "GET") {
       const input = (url.searchParams.get("input") || "").slice(0, 2048);
@@ -132,86 +121,30 @@ async function handler(
         ),
       );
     }
-    if (p[0] === "organization" && method === "GET")
-      return respond(await asActor(actor, (tx) => organization(tx, actor)));
-    if (["categories", "tags", "collections"].includes(p[0])) {
-      if (method === "GET")
-        return respond(
-          (await asActor(actor, (tx) => organization(tx, actor)))[
-            p[0] as "categories" | "tags" | "collections"
-          ],
-        );
-      requireCondition(
-        ["POST", "PATCH", "DELETE"].includes(method),
-        "METHOD_NOT_ALLOWED",
-        "不支持的方法",
-        405,
-      );
-      const body = await bodyOf(req);
-      await asActor(actor, (tx) =>
-        changeOrganization(tx, actor, p[0], method, body, p[1]),
-      );
-      return respond(await asActor(actor, (tx) => organization(tx, actor)));
-    }
     if (p[0] === "resources") {
       if (p[1] === "batch" && method === "POST") {
         const b = z
           .object({
             ids: z.array(z.uuid()).min(1).max(200),
-            action: z.enum([
-              "favorite",
-              "delete",
-              "archive",
-              "restore",
-              "categorize",
-              "tag",
-              "collect",
-            ]),
-            categoryIds: z.array(z.uuid()).optional(),
-            tags: z.array(z.string().max(60)).optional(),
-            collectionId: z.uuid().optional(),
+            action: z.literal("delete"),
           })
           .parse(await bodyOf(req));
         return respond(
           await asActor(actor, async (tx) => {
             for (const id of [...new Set(b.ids)]) {
               const r = await readResource(tx, id);
-              if (b.action === "categorize" || b.action === "tag")
-                await saveResource(
-                  tx,
-                  actor,
-                  {
-                    ...toInput(r),
-                    expectedVersion: r.version,
-                    categoryIds: b.categoryIds || r.categoryIds,
-                    tags: b.tags
-                      ? [...new Set([...r.tags, ...b.tags])]
-                      : r.tags,
-                  },
-                  id,
-                );
-              else if (b.action === "collect") {
-                requireCondition(
-                  b.collectionId,
-                  "INVALID_COLLECTION",
-                  "请选择合集",
-                );
-                const [c] =
-                  await tx`SELECT id FROM collections WHERE id=${b.collectionId} AND owner_id=${actor} FOR UPDATE`;
-                requireCondition(c, "NOT_FOUND", "合集不存在", 404);
-                await tx`INSERT INTO collection_items(collection_id,resource_id,position) SELECT ${b.collectionId},${id},COALESCE(max(position),-1)+1 FROM collection_items WHERE collection_id=${b.collectionId} ON CONFLICT(collection_id,resource_id) DO NOTHING`;
-              } else
-                await mutateResource(tx, actor, id, b.action, {
-                  expectedVersion: r.version,
-                  favorite: true,
-                });
+              await mutateResource(tx, actor, id, b.action, {
+                expectedVersion: r.version,
+              });
             }
             return { updated: new Set(b.ids).size };
           }),
         );
       }
       if (!p[1] && method === "GET")
-        return respond(await listResources(actor, url.searchParams));
+        return respond(
+          await listResources(actor, libraryQuery(url.searchParams)),
+        );
       if (!p[1] && method === "POST")
         return respond(
           await asActor(actor, async (tx) =>
@@ -220,8 +153,11 @@ async function handler(
           201,
         );
       const id = z.uuid().parse(p[1]);
-      if (method === "GET")
-        return respond(await asActor(actor, (tx) => readResource(tx, id)));
+      if (method === "GET" && !p[2]) {
+        const resource = await asActor(actor, (tx) => readResource(tx, id));
+        requireCondition(!resource.deletedAt, "NOT_FOUND", "资源不存在", 404);
+        return respond(resource);
+      }
       if (method === "PATCH" && !p[2]) {
         const body = await bodyOf(req);
         return respond(
@@ -230,9 +166,7 @@ async function handler(
       }
       const action = method === "DELETE" ? "delete" : p[2];
       requireCondition(
-        ["publish", "unpublish", "favorite", "restore", "archive"].includes(
-          action,
-        ) || method === "DELETE",
+        method === "DELETE" && !p[2],
         "NOT_FOUND",
         "接口不存在",
         404,
@@ -246,7 +180,6 @@ async function handler(
       const body = z
         .object({
           expectedVersion: z.number().int().optional(),
-          favorite: z.boolean().optional(),
         })
         .parse(await bodyOf(req));
       return respond(
@@ -314,10 +247,6 @@ async function handler(
             color_position: i,
             color_role: c?.role || "",
             url: r.url,
-            categories: r.categoryIds
-              .map((id) => data.categories.find((x) => x.id === id)?.name || "")
-              .join("|"),
-            tags: r.tags.join("|"),
             description: r.description,
             source_url: r.sourceUrl,
           })),
