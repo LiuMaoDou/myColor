@@ -562,6 +562,7 @@ main {
   padding: 16px 6px 11px !important;
 }
 .resource-heading [data-slot="card-title"] {
+  flex: 1;
   font-size: 17px;
   line-height: 1.5;
   display: flex;
@@ -575,9 +576,9 @@ main {
   white-space: nowrap;
 }
 .resource-heading [data-slot="button"] {
-  width: 29px;
-  height: 29px;
-  color: var(--sidebar-text);
+  width: auto;
+  height: 36px;
+  color: var(--destructive);
   flex-shrink: 0;
 }
 .resource-heading svg {
@@ -1557,8 +1558,7 @@ main {
     padding: 3px 7px;
   }
   .resource-heading [data-slot="button"] {
-    width: 34px;
-    height: 34px;
+    height: 40px;
   }
   .format-row {
     grid-template-columns: 45px 1fr 32px;

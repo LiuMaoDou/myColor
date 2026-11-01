@@ -40,11 +40,13 @@ export function Library({
     [ready, setReady] = useState(false),
     [selecting, setSelecting] = useState(false),
     [selected, setSelected] = useState<string[]>([]),
-    [batchBusy, setBatchBusy] = useState(false);
+    [batchBusy, setBatchBusy] = useState(false),
+    [deletingId, setDeletingId] = useState<string | null>(null);
   const query = libraryQuery(params).toString(),
     pathname = "/library";
   const quickInput = useRef<HTMLInputElement>(null);
   const addingRef = useRef(false);
+  const deletingRef = useRef(false);
   const parsed = quick.trim() ? parseColorBatch(quick.trim()) : [];
   useEffect(() => setReady(true), []);
   const currentType = params.get("type") || "";
@@ -131,12 +133,45 @@ export function Library({
       active = false;
     };
   }, [query, refresh]);
+  async function deleteResource(resource: Resource) {
+    if (
+      deletingRef.current ||
+      !window.confirm(`确定删除「${resource.title}」？`)
+    )
+      return;
+    deletingRef.current = true;
+    setDeletingId(resource.id);
+    try {
+      await api(`/resources/${resource.id}`, {
+        method: "DELETE",
+        body: { expectedVersion: resource.version },
+      });
+      setResources((items) => items.filter((r) => r.id !== resource.id));
+      setSelected((ids) => ids.filter((id) => id !== resource.id));
+      setTotal((count) => Math.max(0, count - 1));
+      toast.success("已删除资源");
+      if (resources.length === 1 && page > 1) {
+        const p = new URLSearchParams(query);
+        p.set("page", String(page - 1));
+        router.replace(`${pathname}?${p}`);
+      }
+      onRefresh();
+    } catch (e) {
+      toast.error((e as Error).message);
+      onRefresh();
+    } finally {
+      deletingRef.current = false;
+      setDeletingId(null);
+    }
+  }
   async function runBatch(action: string) {
+    if (deletingRef.current) return;
     if (
       action === "delete" &&
       !window.confirm(`确定删除所选 ${selected.length} 项资源？`)
     )
       return;
+    deletingRef.current = true;
     setBatchBusy(true);
     try {
       await api("/resources/batch", {
@@ -152,6 +187,7 @@ export function Library({
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
+      deletingRef.current = false;
       setBatchBusy(false);
     }
   }
@@ -302,7 +338,7 @@ export function Library({
           <Button
             size="sm"
             variant="destructive"
-            disabled={!selected.length || batchBusy}
+            disabled={!selected.length || batchBusy || !!deletingId}
             onClick={() => runBatch("delete")}
           >
             删除
@@ -346,6 +382,9 @@ export function Library({
               preferences={preferences}
               selecting={selecting}
               selected={selected.includes(r.id)}
+              onDelete={() => void deleteResource(r)}
+              deleting={deletingId === r.id}
+              deleteDisabled={batchBusy || !!deletingId}
               onSelect={() =>
                 setSelected(
                   selected.includes(r.id)

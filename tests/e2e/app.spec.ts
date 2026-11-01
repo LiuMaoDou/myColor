@@ -186,6 +186,141 @@ test("simplified palette creation, editing, metadata preservation and deletion",
     }
   }
 });
+test("cards can be deleted directly with cancellation, retry and mobile support", async ({
+  page,
+}) => {
+  const created: string[] = [];
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  try {
+    const title = "QA delete card " + Date.now();
+    for (const colors of [["#287F83"], ["#287F83", "#FFF9F0"]]) {
+      const response = await page.request.post("/api/resources", {
+        headers: { origin },
+        data: {
+          type: colors.length === 1 ? "color" : "palette",
+          title: `${title} ${colors.length}`,
+          colors: colors.map((input) => ({ input })),
+        },
+      });
+      expect(response.ok()).toBe(true);
+      created.push((await response.json()).id);
+    }
+    await page.goto(`/library?q=${encodeURIComponent(title)}`);
+    await expect(page.locator(".resource-card")).toHaveCount(2);
+    const card = page.locator(".resource-card").filter({
+      has: page.getByRole("link", { name: `${title} 1`, exact: true }),
+    });
+    const remove = card.getByRole("button", {
+      name: `删除 ${title} 1`,
+      exact: true,
+    });
+    await expect(remove).toBeVisible();
+    let deletes = 0;
+    page.on("request", (r) => {
+      if (r.method() === "DELETE") deletes++;
+    });
+    page.once("dialog", async (dialog) => {
+      expect(dialog.message()).toContain(`${title} 1`);
+      await dialog.dismiss();
+    });
+    await remove.click();
+    await expect(card).toBeVisible();
+    expect(deletes).toBe(0);
+    expect((await page.request.get(`/api/resources/${created[0]}`)).ok()).toBe(
+      true,
+    );
+
+    // A failed delete must keep the card available for a retry.
+    const endpoint = `**/api/resources/${created[0]}`;
+    await page.route(endpoint, async (route) => {
+      if (route.request().method() === "DELETE")
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { message: "暂时无法删除，请重试" } }),
+        });
+      else await route.continue();
+    });
+    page.once("dialog", (dialog) => dialog.accept());
+    await remove.click();
+    await expect(
+      page.getByText("暂时无法删除，请重试", { exact: true }),
+    ).toBeVisible();
+    await expect(card).toBeVisible();
+    await expect(remove).toBeEnabled();
+    await page.unroute(endpoint);
+
+    await page.getByRole("button", { name: "批量选择", exact: true }).click();
+    await page
+      .getByRole("checkbox", { name: `选择 ${title} 1`, exact: true })
+      .check();
+    await expect(page.locator(".batch-toolbar")).toContainText("已选 1 项");
+    // While the server is pending, repeated clicks must not send another delete.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route(endpoint, async (route) => {
+      if (route.request().method() === "DELETE") await gate;
+      await route.continue();
+    });
+    try {
+      page.once("dialog", (dialog) => dialog.accept());
+      await remove.click();
+      await expect(remove).toBeDisabled();
+      await expect(remove).toHaveText("删除中…");
+      await remove.evaluate((button: HTMLButtonElement) => button.click());
+      expect(deletes).toBe(2);
+    } finally {
+      release();
+    }
+    await expect(card).toHaveCount(0);
+    await expect(page.locator(".resource-card")).toHaveCount(1);
+    await expect(page.locator(".batch-toolbar")).toContainText("已选 0 项");
+    await expect(page.locator(".list-footer")).toContainText("1 项资源");
+    expect(
+      (await page.request.get(`/api/resources/${created[0]}`)).status(),
+    ).toBe(404);
+    await page.unroute(endpoint);
+    await page.reload();
+    await expect(card).toHaveCount(0);
+    await expect(page.locator(".resource-card")).toHaveCount(1);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const paletteRemove = page.getByRole("button", {
+      name: `删除 ${title} 2`,
+      exact: true,
+    });
+    await expect(paletteRemove).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    page.once("dialog", (dialog) => dialog.accept());
+    await paletteRemove.click();
+    await expect(
+      page.getByRole("heading", { name: "这里还没有资源" }),
+    ).toBeVisible();
+    await expect(page).toHaveURL(new RegExp("/library\\?q="));
+    expect(
+      (await page.request.get(`/api/resources/${created[1]}`)).status(),
+    ).toBe(404);
+    expect(errors).toEqual([]);
+  } finally {
+    const { default: postgres } = await import("postgres");
+    const { config } = await import("dotenv");
+    config({ quiet: true });
+    const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
+    for (const id of created) {
+      await sql`DELETE FROM audit_events WHERE resource_id=${id}`;
+      await sql`DELETE FROM resources WHERE id=${id}`;
+    }
+    await sql.end();
+  }
+});
+
 test("navigation only shows the library and resource types", async ({
   page,
 }) => {

@@ -1,22 +1,29 @@
 "use client";
 import Link from "next/link";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowUpRight, Trash2 } from "lucide-react";
 import type { Resource } from "@/lib/types";
 import type { Preferences } from "@/lib/client";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Swatch } from "./swatch";
+import { Button } from "./ui/button";
 export function ResourceCard({
   resource: r,
   preferences,
   selecting = false,
   selected = false,
   onSelect,
+  onDelete,
+  deleting = false,
+  deleteDisabled = false,
 }: {
   resource: Resource;
   preferences: Preferences;
   selecting?: boolean;
   selected?: boolean;
   onSelect?: () => void;
+  onDelete: () => void;
+  deleting?: boolean;
+  deleteDisabled?: boolean;
 }) {
   return (
     <Card className="resource-card" data-selected={selected}>
@@ -54,6 +61,17 @@ export function ResourceCard({
           ) : null}
           <Link href={`/resources/${r.id}`}>{r.title}</Link>
         </CardTitle>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-label={`删除 ${r.title}`}
+          disabled={deleteDisabled}
+          onClick={onDelete}
+        >
+          <Trash2 />
+          {deleting ? "删除中…" : "删除"}
+        </Button>
       </CardHeader>
       {r.type === "website" ? (
         <p className="website-description">{r.description}</p>
