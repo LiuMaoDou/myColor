@@ -125,8 +125,10 @@ test("simplified palette creation, editing, metadata preservation and deletion",
       },
     });
     expect(seeded.ok()).toBe(true);
-    await page.reload();
-    await page.getByRole("button", { name: "编辑资源", exact: true }).click();
+    await page.goto(`/library?q=${encodeURIComponent(title)}`);
+    const card = page.locator(".resource-card").filter({ hasText: title });
+    await card.getByRole("link", { name: `编辑 ${title}` }).click();
+    await expect(page).toHaveURL(new RegExp(`/resources/${id}/edit$`));
     await expect(page.getByLabel("颜色数据")).toHaveValue(
       saved.colors.map((c: { input: string }) => c.input).join("\n"),
     );
@@ -208,6 +210,11 @@ test("cards can be deleted directly with cancellation, retry and mobile support"
     }
     await page.goto(`/library?q=${encodeURIComponent(title)}`);
     await expect(page.locator(".resource-card")).toHaveCount(2);
+    for (const [index, id] of created.entries()) {
+      await expect(
+        page.getByRole("link", { name: `编辑 ${title} ${index + 1}` }),
+      ).toHaveAttribute("href", `/resources/${id}/edit`);
+    }
     const card = page.locator(".resource-card").filter({
       has: page.getByRole("link", { name: `${title} 1`, exact: true }),
     });

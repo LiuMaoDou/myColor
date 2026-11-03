@@ -570,16 +570,23 @@ main {
   gap: 8px;
   min-width: 0;
 }
-.resource-heading a {
+.resource-heading [data-slot="card-title"] a {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.resource-card-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+}
 .resource-heading [data-slot="button"] {
   width: auto;
   height: 36px;
-  color: var(--destructive);
   flex-shrink: 0;
+}
+.resource-heading .resource-delete {
+  color: var(--destructive);
 }
 .resource-heading svg {
   width: 17px !important;

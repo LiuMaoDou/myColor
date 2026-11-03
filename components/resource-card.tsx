@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { ArrowUpRight, Trash2 } from "lucide-react";
+import { ArrowUpRight, Pencil, Trash2 } from "lucide-react";
 import type { Resource } from "@/lib/types";
 import type { Preferences } from "@/lib/client";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
@@ -61,17 +61,31 @@ export function ResourceCard({
           ) : null}
           <Link href={`/resources/${r.id}`}>{r.title}</Link>
         </CardTitle>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          aria-label={`删除 ${r.title}`}
-          disabled={deleteDisabled}
-          onClick={onDelete}
-        >
-          <Trash2 />
-          {deleting ? "删除中…" : "删除"}
-        </Button>
+        <div className="resource-card-actions">
+          {r.type !== "website" ? (
+            <Button variant="ghost" size="sm" asChild>
+              <Link
+                href={`/resources/${r.id}/edit`}
+                aria-label={`编辑 ${r.title}`}
+              >
+                <Pencil data-icon="inline-start" />
+                编辑
+              </Link>
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="resource-delete"
+            aria-label={`删除 ${r.title}`}
+            disabled={deleteDisabled}
+            onClick={onDelete}
+          >
+            <Trash2 data-icon="inline-start" />
+            {deleting ? "删除中…" : "删除"}
+          </Button>
+        </div>
       </CardHeader>
       {r.type === "website" ? (
         <p className="website-description">{r.description}</p>
